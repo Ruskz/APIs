@@ -10,6 +10,7 @@ the --giantbomb-api-key argument.
 
 
 from __future__ import print_function
+import logging
 
 import requests
 
@@ -111,8 +112,102 @@ class CPIData(object):
         calculated inflation for an item
 
         """
+        # Currently there is no CPI data for 2014
+        if current_year is None or current_year > 2013:
+            curent_year = 2013
+        # If out data range doens't provide a CPI for the given year
+        # Use the edge data.
+        if year < self.first_year:
+            year = self.first_year
+        elif year > self.last_year:
+            year = self.last_year
 
+        year_cpi = self.year_cpi[year]
+        current_cpi = self.year_cpi[current_year]
 
+        return float(price)/year_cpi*current_cpi
+
+class GiantbombAPI(object):
+    """Very simple implementation of the Giantbomb API that only offers
+    ther GET /platformts/ call as a generator"""
+
+    base_url = 'http://www.giantbomb.com/api'
+
+    def __init__(self, api_key):
+        self.api_key = api_key
+
+    def get_platforms(self, sort=None, filter=None, field_list=None):
+        """Generator yeilding platforms matching the given criteria. If no
+        limit is specificed, this will return all platforms. """
+
+        # The API itself allows us to filer the data returned either
+        # by requesting only a subset of data elements or a subset with each
+        # data element (like on the name, price and release date.
+
+        # The following lines also do value-format conversions from what's
+        # common in Python (lists, dictionaries) into what the API requires.
+        # This is especially apparent with the filter-parameter where we
+        # need to convert a dictionary of criteria into a a comma-seperated
+        # list of key:value pairs.
+        params = {}
+        if sort is not None:
+            params['sort'] = sort
+        if field_list is not None:
+            params['field_list'] = ','.join(field_list)
+        if filer is not None:
+            params['filter'] = filter
+            parsed_filers = []
+            for key, value in filter.iteritems():
+                parsed_filres.append('{0}:{1}'.format(key, value))
+            params['filter'] = ','.join(parsed_filters)
+
+        # Last but not lease we append our API key to the list of parameters
+        # and tell the API that we would like to have our data being returned
+        # as JSON
+        params['api_key'] = self.api_key
+        params['format'] = 'json'
+
+        incomplete_result = True
+        num_total_results = None
+        num_fetched_results = 0
+        counter = 0
+
+        while incomplete_results:
+            # Giantbomb's limit for items in a result set for this API is 100
+            # items. But given that there are more than 100 platforms in their
+            # database we will have to fetch them in more than one call.
+            #
+            # Most APIs that have such limits (and most do) offer a way to
+            # page through result sets using either a "page" or (as is here
+            # the case) an "offset" parameter which allows you to "skip" a
+            # certain number of items.
+            params['offset'] = num_fetched_results
+            result = requests.get(self.base_url + '/platforms/',
+                                   params=params)
+            result = result.json()
+            if num_total_results is None:
+                num_total_results = int(result['number_of_total_results'])
+            num_fetched_results += int(result['number_of_total_results'])
+            if num_fetched_results >= num_total_results:
+                incomplete_results = False
+            for item in result['results']:
+                logging.debug('Yielding platform {0} of {1}'.format(
+                    counter+1, num_total_results))
+
+                # Since this is suppose to be an abstraction, we also convert
+                # values here into a more useful format where appropriate
+                if 'original_price' in item and item['original_price']:
+                    item['original_price'] = float(item['original_price'])
+
+                # The "yield" keyword is what makes this a generator.
+                # Implementing this method as generator has the advantage
+                # that we can stop fetching of further data from the server
+                # dynamically from the outside by simply stop iterating over
+                # the generator.
+                yield item
+                counter +=1
+
+    
 def main():
     """This function handles the actual logic of the script"""
 
